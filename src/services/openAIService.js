@@ -3,130 +3,217 @@
 
 import OpenAI from 'openai';
 
+/* =========================
+   INTENT + EXTRACTION UTILS
+   ========================= */
+
+function classifyIntent(text) {
+  const t = text.toLowerCase();
+
+  if (/^(wait|hold on|gimme a sec|one sec|pause)/.test(t)) return "pause";
+  if (/(meant|actually|sorry|no i|correction)/.test(t)) return "correction";
+  if (/(go back|previous|earlier|wait no its)/.test(t)) return "rewind";
+  if (/(don't know|not sure|no idea|can't remember)/.test(t)) return "unknown";
+
+  return "answer";
+}
+
+function extractCourse(text) {
+  const match = text.match(/[A-Z]{3,4}\s?\d{4}/i);
+  return match ? match[0].toUpperCase() : null;
+}
+
+/* =========================
+   OPENAI SERVICE
+   ========================= */
+
 class OpenAIService {
   constructor() {
-    // Get API key from environment variable
-    // For production, use: process.env.REACT_APP_OPENAI_API_KEY
     this.apiKey = process.env.REACT_APP_OPENAI_API_KEY || '';
-    
+
     if (this.apiKey) {
       this.client = new OpenAI({
         apiKey: this.apiKey,
-        dangerouslyAllowBrowser: true // Note: In production, use a backend proxy
+        dangerouslyAllowBrowser: true
       });
     } else {
-      console.warn('OpenAI API key not set. AI conversation features will be limited.');
+      console.warn('OpenAI API key not set.');
       this.client = null;
     }
 
+
     // System prompt for the assistant
-    this.systemPrompt = `You are a friendly voice assistant helping students provide feedback about their courses and professors. Your goal is to have a natural, conversational flow while collecting structured information.
+    this.systemPrompt = `You are a friendly AI voice assistant having a casual conversation with a university student about a course they took.
+Your goal is to naturally collect information to later write a Rate My Prof–style review.
 
-Guidelines:
-- Be warm, friendly, and conversational - like talking to a friend
-- Keep responses brief (1-2 sentences maximum) - this is a voice conversation
-- Ask one question at a time
-- Adapt your follow-up questions based on what the student says
-- Don't be robotic or overly formal
-- If a student gives you information, acknowledge it naturally before moving on
-- If you need to collect specific data, work it into the conversation naturally
-- Handle irregular responses naturally:
-  * If they say "gimme a second", "hold on", "wait" - acknowledge and wait (e.g., "No problem, take your time!")
-  * If they say "I don't know", "not sure", "don't remember" - be understanding and offer to skip or move on (e.g., "That's okay! No worries if you're not sure.")
-  * If they're hesitant or uncertain, reassure them and either re-ask gently or move forward
-- Always stay friendly and patient, never pushy
+STYLE & TONE
+- Sound warm, relaxed, and human — like chatting with a friend
+- Keep responses to 1–2 short sentences (voice conversation)
+- Ask only ONE question at a time
+- Never sound robotic, formal, or scripted
+- Acknowledge what the student says before moving on
 
-Information you should try to collect:
+CONVERSATION CONTROL
+You must actively manage the conversation state.
+
+Internally track:
+- Which question you are currently on
+- What information has already been collected
+- What information is missing or unclear
+
+If the student:
+- Asks to wait / pause / “gimme a sec”
+  → Acknowledge and wait without advancing
+- Says “go back”, “can I change that”, or corrects themselves
+  → Accept the correction and update the previous answer
+- Says “I don’t know”, “not sure”, or “don’t remember”
+  → Reassure them and either skip or gently move forward
+- Answers the wrong question
+  → Acknowledge their answer, then gently restate the current question
+- Gives multiple pieces of info at once
+  → Accept everything relevant and move to the next missing item
+- Goes off-topic
+  → Respond briefly, then steer back naturally
+
+Never scold, rush, or repeat questions verbatim unless needed.
+
+DATA EXTRACTION RULES
+- Convert casual language into structured values when possible
+  (e.g., “pretty hard” → difficulty ≈ 4/5)
+- If a rating is unclear, ask a short follow-up for clarification
+- Grades are optional — never pressure them
+- If they refuse a question, accept it and continue
+
+INFORMATION TO COLLECT (order flexible, adapt naturally):
 1. Course name/code
-2. Overall rating (1-5 scale, or extract from their words)
-3. Difficulty level (1-5 scale)
-4. Detailed feedback about their experience
-5. Whether they took it for credit
-6. Attendance requirements
-7. Whether they would take it again
-8. Their grade (optional)
+2. Overall rating (1–5 or inferred)
+3. Difficulty (1–5 or inferred)
+4. General experience / thoughts
+5. Took it for credit (yes/no)
+6. Attendance requirement
+7. Would take again (yes/no/maybe)
+8. Grade (optional)
 9. Textbook usage
 
-Remember: This is a voice conversation, so keep it natural and brief!`;
+FLOW GUIDANCE
+- Start broad, then get specific
+- If the student sounds hesitant, reassure and simplify
+- If you already have enough detail, do NOT over-question
+- When all info is collected, end naturally and thank them
+
+IMPORTANT
+This is a spoken conversation.
+Short, natural responses only.
+Be patient, adaptive, and human.`;
   }
 
-  // Generate a natural response using OpenAI
-  async generateResponse(conversationHistory, currentPhase, collectedData, userResponse) {
-    if (!this.client) {
-      // Fallback to basic response if no API key
-      return null;
-    }
+ /* =========================
+     MAIN RESPONSE GENERATOR
+     ========================= */
 
-    try {
-      // Get context about what we need to collect next
-      const phaseContext = this.getPhaseContext(currentPhase, collectedData);
-      
-      // Build system message with prompt and context
-      let systemContent = this.systemPrompt;
-      if (phaseContext) {
-        systemContent += `\n\nCurrent context: ${phaseContext}`;
+     async generateResponse(conversationHistory, currentPhase, collectedData, userResponse) {
+      if (!this.client) return null;
+  
+      /* ---------- INTENT HANDLING (BEFORE MODEL) ---------- */
+  
+      const intent = classifyIntent(userResponse);
+  
+      if (intent === "pause") {
+        return "No worries — take your time.";
       }
-      
-      // Build conversation context - userResponse is already in conversationHistory
-      // so we don't need to add it again
+  
+      if (intent === "unknown") {
+        return "That’s totally fine — we can skip that.";
+      }
+  
+      if (intent === "correction") {
+        const newCourse = extractCourse(userResponse);
+        if (newCourse) {
+          collectedData.course = newCourse;
+          currentPhase = "overallRating";
+        }
+      }
+  
+      if (intent === "rewind") {
+        currentPhase = "initialFeedback";
+      }
+  
+      /* ---------- PHASE AUTO-ADVANCE ---------- */
+  
+      if (currentPhase === "overallRating" && collectedData.overallRating) {
+        currentPhase = "difficulty";
+      }
+  
+      if (currentPhase === "difficulty" && collectedData.difficulty) {
+        currentPhase = "detailedFeedback";
+      }
+  
+      /* ---------- SYSTEM MESSAGE ---------- */
+  
+      let systemContent = `
+  ${this.systemPrompt}
+  
+  CURRENT PHASE: ${currentPhase}
+  COLLECTED DATA: ${JSON.stringify(collectedData)}
+  `;
+  
       const messages = [
         { role: 'system', content: systemContent }
       ];
-      
-      // Add conversation history
-      const historyToInclude = conversationHistory.map(msg => ({
-        role: msg.type === 'user' ? 'user' : 'assistant',
-        content: msg.message
-      }));
-      
-      // Only add userResponse if it's not already the last message in history
-      const lastHistoryMsg = conversationHistory[conversationHistory.length - 1];
-      if (!lastHistoryMsg || lastHistoryMsg.message !== userResponse) {
-        historyToInclude.push({ role: 'user', content: userResponse });
-      }
-      
-      messages.push(...historyToInclude);
-
-      const completion = await this.client.chat.completions.create({
-        model: 'gpt-4o-mini', // or 'gpt-3.5-turbo' for faster/cheaper
-        messages: messages,
-        temperature: 0.7, // Balance between creativity and consistency
-        max_tokens: 150, // Keep responses brief for voice
-        presence_penalty: 0.6, // Encourage natural conversation
+  
+      /* ---------- FULL HISTORY (NO FILTERING) ---------- */
+  
+      conversationHistory.forEach(msg => {
+        messages.push({
+          role: msg.type === 'user' ? 'user' : 'assistant',
+          content: msg.message
+        });
       });
-
-      const response = completion.choices[0]?.message?.content;
-      return response ? response.trim() : null;
-    } catch (error) {
-      console.error('Error calling OpenAI API:', error);
-      return null;
+  
+      messages.push({ role: 'user', content: userResponse });
+  
+      /* ---------- OPENAI CALL ---------- */
+  
+      try {
+        const completion = await this.client.chat.completions.create({
+          model: 'gpt-4o-mini',
+          messages,
+          temperature: 0.7,
+          max_tokens: 60,
+          presence_penalty: 0.6
+        });
+  
+        return completion.choices[0]?.message?.content?.trim() || null;
+      } catch (err) {
+        console.error('OpenAI error:', err);
+        return null;
+      }
+    }
+  
+    /* =========================
+       PHASE CONTEXT (OPTIONAL)
+       ========================= */
+  
+    getPhaseContext(phase, collectedData) {
+      const contexts = {
+        greeting: "Greet them and ask how they're doing.",
+        initialFeedback: "Ask what course they want to review.",
+        overallRating: "Ask for overall rating (1–5).",
+        difficulty: "Ask about difficulty (1–5).",
+        detailedFeedback: "Ask about their experience.",
+        attendance: "Ask about attendance.",
+        wouldTakeAgain: "Ask if they'd take it again.",
+        grade: "Ask grade (optional).",
+        textbook: "Ask about textbook usage.",
+        closing: "Thank them."
+      };
+  
+      return contexts[phase] || null;
+    }
+  
+    isConfigured() {
+      return !!this.client;
     }
   }
-
-  // Get context about what information we're trying to collect
-  getPhaseContext(phase, collectedData) {
-    const contexts = {
-      greeting: "Start by greeting them warmly and asking how they're doing. Then ask what course they want to review.",
-      initialFeedback: `We're trying to identify the course. Collected so far: ${JSON.stringify(collectedData)}`,
-      overallRating: `We're collecting the overall rating (1-5). Collected so far: ${JSON.stringify(collectedData)}`,
-      difficulty: `We're collecting the difficulty level (1-5). Collected so far: ${JSON.stringify(collectedData)}`,
-      detailedFeedback: `We're collecting detailed feedback about their experience. Collected so far: ${JSON.stringify(collectedData)}`,
-      adaptive_followup: `We're following up on their detailed feedback to get more specifics. Collected so far: ${JSON.stringify(collectedData)}`,
-      additionalQuestions: `We're asking if they took it for credit. Collected so far: ${JSON.stringify(collectedData)}`,
-      attendance: `We're asking about attendance requirements. Collected so far: ${JSON.stringify(collectedData)}`,
-      wouldTakeAgain: `We're asking if they would take the course again. Collected so far: ${JSON.stringify(collectedData)}`,
-      grade: `We're asking about their grade (optional). Collected so far: ${JSON.stringify(collectedData)}`,
-      textbook: `We're asking about textbook usage. Collected so far: ${JSON.stringify(collectedData)}`,
-      closing: "Thank them and let them know their feedback has been saved."
-    };
-
-    return contexts[phase] || null;
-  }
-
-  // Check if API key is configured
-  isConfigured() {
-    return !!this.apiKey && !!this.client;
-  }
-}
-
-export default new OpenAIService();
+  
+  export default new OpenAIService();

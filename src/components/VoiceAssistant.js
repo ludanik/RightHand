@@ -22,42 +22,201 @@ function VoiceAssistant({ onComplete, onClose }) {
   const isSpeakingRef = useRef(false); // Ref to track speaking state
   const handleFinishResponseRef = useRef(null); // Ref to store handleFinishResponse function
 
-  // Initialize with greeting message
-  useEffect(() => {
-    // Prevent double-speaking in React StrictMode
-    if (hasSpokenGreeting.current) {
+  // Define speakMessage and startListening functions first (before useEffect that uses them)
+  // This ensures they're available when the useEffect runs
+  
+  // Speak message using ElevenLabs
+  const speakMessage = async (text) => {
+    if (!text) {
+      console.warn('No text provided to speakMessage');
       return;
     }
+    
+    console.log('speakMessage called with:', text.substring(0, 50) + '...');
+    
+    // Stop listening when assistant starts speaking (prevents picking up assistant's voice)
+    stopListening();
+    
+    // Cancel any ongoing speech (browser TTS) before starting new speech
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    
+    setIsSpeaking(true);
+    isSpeakingRef.current = true;
+    
+    try {
+      console.log('Calling ElevenLabs speak with:', text.substring(0, 50) + '...');
+      const result = await elevenLabsService.speak(text);
+      console.log('ElevenLabs speak result:', result);
+      
+      // If ElevenLabs returns null or false, fall back to browser TTS
+      // Only use browser TTS if ElevenLabs completely fails (not both)
+      if (!result) {
+        console.log('ElevenLabs returned false/null, falling back to browser speech synthesis');
+        if ('speechSynthesis' in window) {
+          // Ensure no other speech is playing
+          window.speechSynthesis.cancel();
+          
+          // Wait a moment to ensure any ongoing ElevenLabs audio is stopped
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = 1.0;
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+          
+          await new Promise((resolve, reject) => {
+            utterance.onend = () => {
+              console.log('Browser TTS completed');
+              resolve();
+            };
+            utterance.onerror = (error) => {
+              console.error('Browser TTS error:', error);
+              reject(error);
+            };
+            
+            window.speechSynthesis.speak(utterance);
+          });
+        } else {
+          console.warn('Browser speech synthesis not available');
+        }
+      }
+    } catch (error) {
+      console.error('Error in speakMessage:', error);
+      console.error('Error details:', error.message, error.stack);
+      // Final fallback: try browser TTS even if there was an error
+      // But only if ElevenLabs didn't already succeed
+      if ('speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+          // Wait a moment before speaking
+          await new Promise(resolve => setTimeout(resolve, 200));
+          const utterance = new SpeechSynthesisUtterance(text);
+          window.speechSynthesis.speak(utterance);
+        } catch (ttsError) {
+          console.error('Browser TTS also failed:', ttsError);
+        }
+      }
+    } finally {
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+    }
+  };
+
+  // Stop listening
+  const stopListening = () => {
+    if (recognitionRef.current && (isListening || isListeningRef.current)) {
+      try {
+        recognitionRef.current.stop();
+      } catch (error) {
+        console.warn('Error stopping recognition:', error);
+      }
+      setIsListening(false);
+      isListeningRef.current = false;
+    }
+  };
+
+  // Start listening for voice input
+  const startListening = () => {
+    console.log('startListening called - checking conditions:', {
+      hasRecognition: !!recognitionRef.current,
+      isListeningRef: isListeningRef.current,
+      isListeningState: isListening,
+      isSpeakingRef: isSpeakingRef.current,
+      isSpeakingState: isSpeaking,
+      isProcessingRef: isProcessingRef.current,
+      isProcessingState: isProcessing
+    });
+    
+    // Prevent starting if already listening or in an invalid state
+    // Use refs for more reliable checks (avoid closure issues)
+    if (!recognitionRef.current || 
+        isListeningRef.current || 
+        isSpeakingRef.current || 
+        isProcessingRef.current) {
+      console.log('Cannot start listening - blocked by condition');
+      return;
+    }
+    
+    try {
+      console.log('Starting recognition...');
+      isListeningRef.current = true;
+      setIsListening(true);
+      recognitionRef.current.start();
+    } catch (error) {
+      // If recognition is already running, just update state
+      if (error.name === 'InvalidStateError') {
+        console.warn('Recognition already started, skipping');
+        isListeningRef.current = true;
+        setIsListening(true);
+      } else {
+        console.error('Error starting recognition:', error);
+        isListeningRef.current = false;
+        setIsListening(false);
+      }
+    }
+  };
+
+  // Initialize with greeting message
+  useEffect(() => {
+    console.log('VoiceAssistant: Component mounted, initializing...');
+    
+    // Reset greeting flag when component mounts
+    hasSpokenGreeting.current = false;
     
     // Initialize voice (try to find Mark voice)
     elevenLabsService.initializeVoice().catch(err => {
       console.warn('Could not initialize voice:', err);
     });
     
+    // Initialize speech recognition if available
+    console.log('VoiceAssistant: Initializing speech recognition...');
+    initializeSpeechRecognition();
+    
     const greetingMessage = conversationService.getCurrentMessage();
+    console.log('VoiceAssistant: Greeting message:', greetingMessage);
+    
     setMessages([{
       type: 'assistant',
       message: greetingMessage,
       timestamp: new Date()
     }]);
     
-    // Initialize speech recognition if available
-    initializeSpeechRecognition();
-    
-    // Mark greeting as spoken to prevent double-speaking
-    hasSpokenGreeting.current = true;
-    
-    // Auto-speak greeting and start listening after
-    speakMessage(greetingMessage).then(() => {
-      // Auto-start listening after greeting is spoken
-      if (isContinuousMode.current && !isListeningRef.current) {
+    // Small delay to ensure everything is initialized, then speak greeting
+    // Use hasSpokenGreeting ref to prevent double-speaking in React StrictMode
+    setTimeout(() => {
+      if (hasSpokenGreeting.current) {
+        console.log('VoiceAssistant: Greeting already spoken, skipping...');
+        return;
+      }
+      
+      hasSpokenGreeting.current = true;
+      console.log('VoiceAssistant: Starting greeting message...', greetingMessage);
+      
+      // Auto-speak greeting and start listening after
+      speakMessage(greetingMessage).then(() => {
+        console.log('VoiceAssistant: Greeting spoken successfully, starting to listen...');
+        // Auto-start listening after greeting is spoken
+        if (isContinuousMode.current && !isListeningRef.current) {
+          setTimeout(() => {
+            if (!isListeningRef.current && recognitionRef.current) {
+              console.log('VoiceAssistant: Auto-starting listening after greeting...');
+              startListening();
+            }
+          }, 800);
+        }
+      }).catch(error => {
+        console.error('VoiceAssistant: Error speaking greeting:', error);
+        // Even if speaking fails, try to start listening
         setTimeout(() => {
-          if (!isListeningRef.current) {
+          if (!isListeningRef.current && !isSpeakingRef.current && recognitionRef.current) {
+            console.log('VoiceAssistant: Starting listening despite greeting error...');
             startListening();
           }
-        }, 800);
-      }
-    });
+        }, 1000);
+      });
+    }, 500);
     
     return () => {
       // Cleanup: stop all audio, recognition, and reset state when component unmounts
@@ -86,6 +245,10 @@ function VoiceAssistant({ onComplete, onClose }) {
       }
     };
   }, []);
+
+  // Update function ref (will be set after handleFinishResponse is defined)
+  // We can't use useEffect with handleFinishResponse as dependency since it's recreated on every render
+  // Instead, we'll update it in handleFinishResponse itself and in the timeout callbacks
 
   // Complete cleanup: stop all audio, speech recognition, and clear timeouts
   const cleanupAll = () => {
@@ -246,135 +409,6 @@ function VoiceAssistant({ onComplete, onClose }) {
     }
   };
 
-  // Start listening for voice input
-  const startListening = () => {
-    console.log('startListening called - checking conditions:', {
-      hasRecognition: !!recognitionRef.current,
-      isListeningRef: isListeningRef.current,
-      isListeningState: isListening,
-      isSpeakingRef: isSpeakingRef.current,
-      isSpeakingState: isSpeaking,
-      isProcessingRef: isProcessingRef.current,
-      isProcessingState: isProcessing
-    });
-    
-    // Prevent starting if already listening or in an invalid state
-    // Use refs for more reliable checks (avoid closure issues)
-    if (!recognitionRef.current || 
-        isListeningRef.current || 
-        isSpeakingRef.current || 
-        isProcessingRef.current) {
-      console.log('Cannot start listening - blocked by condition');
-      return;
-    }
-    
-    try {
-      console.log('Starting recognition...');
-      isListeningRef.current = true;
-      setIsListening(true);
-      recognitionRef.current.start();
-    } catch (error) {
-      // If recognition is already running, just update state
-      if (error.name === 'InvalidStateError') {
-        console.warn('Recognition already started, skipping');
-        isListeningRef.current = true;
-        setIsListening(true);
-      } else {
-        console.error('Error starting recognition:', error);
-        isListeningRef.current = false;
-        setIsListening(false);
-      }
-    }
-  };
-
-  // Stop listening
-  const stopListening = () => {
-    if (recognitionRef.current && (isListening || isListeningRef.current)) {
-      try {
-        recognitionRef.current.stop();
-      } catch (error) {
-        console.warn('Error stopping recognition:', error);
-      }
-      setIsListening(false);
-      isListeningRef.current = false;
-    }
-  };
-
-  // Speak message using ElevenLabs
-  const speakMessage = async (text) => {
-    if (!text) {
-      console.warn('No text provided to speakMessage');
-      return;
-    }
-    
-    console.log('speakMessage called with:', text.substring(0, 50) + '...');
-    
-    // Stop listening when assistant starts speaking (prevents picking up assistant's voice)
-    stopListening();
-    
-    // Cancel any ongoing speech (browser TTS) before starting new speech
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-    
-    setIsSpeaking(true);
-    isSpeakingRef.current = true;
-    try {
-      const result = await elevenLabsService.speak(text);
-      
-      // If ElevenLabs returns null or false, fall back to browser TTS
-      // Only use browser TTS if ElevenLabs completely fails (not both)
-      if (!result) {
-        console.log('Falling back to browser speech synthesis');
-        if ('speechSynthesis' in window) {
-          // Ensure no other speech is playing
-          window.speechSynthesis.cancel();
-          
-          // Wait a moment to ensure any ongoing ElevenLabs audio is stopped
-          await new Promise(resolve => setTimeout(resolve, 100));
-          
-          const utterance = new SpeechSynthesisUtterance(text);
-          utterance.rate = 1.0;
-          utterance.pitch = 1.0;
-          utterance.volume = 1.0;
-          
-          await new Promise((resolve, reject) => {
-            utterance.onend = () => {
-              console.log('Browser TTS completed');
-              resolve();
-            };
-            utterance.onerror = (error) => {
-              console.error('Browser TTS error:', error);
-              reject(error);
-            };
-            
-            window.speechSynthesis.speak(utterance);
-          });
-        } else {
-          console.warn('Browser speech synthesis not available');
-        }
-      }
-    } catch (error) {
-      console.error('Error in speakMessage:', error);
-      // Final fallback: try browser TTS even if there was an error
-      // But only if ElevenLabs didn't already succeed
-      if ('speechSynthesis' in window) {
-        try {
-          window.speechSynthesis.cancel();
-          // Wait a moment before speaking
-          await new Promise(resolve => setTimeout(resolve, 200));
-          const utterance = new SpeechSynthesisUtterance(text);
-          window.speechSynthesis.speak(utterance);
-        } catch (ttsError) {
-          console.error('Browser TTS also failed:', ttsError);
-        }
-      }
-    } finally {
-      setIsSpeaking(false);
-      isSpeakingRef.current = false;
-    }
-  };
-
   // Handle finishing response (process pending transcript)
   const handleFinishResponse = async () => {
     console.log('=== handleFinishResponse called ===');
@@ -383,6 +417,9 @@ function VoiceAssistant({ onComplete, onClose }) {
     console.log('currentTranscript state:', currentTranscript);
     console.log('isProcessing state:', isProcessing, 'ref:', isProcessingRef.current);
     console.log('isSpeaking state:', isSpeaking, 'ref:', isSpeakingRef.current);
+    
+    // Update ref for use in callbacks (keep it current)
+    handleFinishResponseRef.current = handleFinishResponse;
     
     // Clear auto-finish timeout if it exists
     if (autoFinishTimeoutRef.current) {
@@ -467,8 +504,9 @@ function VoiceAssistant({ onComplete, onClose }) {
       if (result.isComplete) {
         isContinuousMode.current = false; // Stop continuous listening
         const reviewData = conversationService.getCollectedReview();
+        const conversationHistory = conversationService.conversationState.conversationHistory;
         setTimeout(() => {
-          onComplete(reviewData);
+          onComplete(reviewData, conversationHistory);
         }, 1500); // Give time for final message to be heard
       } else {
         // Auto-restart listening after assistant finishes speaking (continuous conversation)

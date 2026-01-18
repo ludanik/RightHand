@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
+import LandingPage from './components/LandingPage';
 import ProfessorProfile from './components/ProfessorProfile';
 import ReviewFeed from './components/ReviewFeed';
 import VoiceAssistant from './components/VoiceAssistant';
 import TextReview from './components/TextReview';
+import SummaryPage from './components/SummaryPage';
 import './App.css';
 
 // Sample professor data
@@ -78,9 +80,12 @@ const initialReviews = [
 ];
 
 function App() {
+  const [appState, setAppState] = useState('landing'); // 'landing' | 'voice' | 'summary' | 'community'
   const [reviews, setReviews] = useState(initialReviews);
   const [showVoiceAssistant, setShowVoiceAssistant] = useState(false);
   const [showTextReview, setShowTextReview] = useState(false);
+  const [pendingReview, setPendingReview] = useState(null);
+  const [pendingConversationHistory, setPendingConversationHistory] = useState([]);
 
   const handleVoiceReview = () => {
     setShowVoiceAssistant(true);
@@ -90,13 +95,34 @@ function App() {
     setShowTextReview(true);
   };
 
-  const handleVoiceAssistantComplete = (reviewData) => {
-    addReview(reviewData);
+  const handleVoiceAssistantComplete = (reviewData, conversationHistory = []) => {
+    setPendingReview(reviewData);
+    setPendingConversationHistory(conversationHistory);
     setShowVoiceAssistant(false);
+    setAppState('summary'); // Show summary page after conversation
   };
 
   const handleVoiceAssistantClose = () => {
     setShowVoiceAssistant(false);
+    setAppState('landing'); // Go back to landing page
+  };
+
+  const handleStartRecording = () => {
+    setAppState('voice');
+    setShowVoiceAssistant(true);
+  };
+
+  const handleSummaryApprove = (reviewData) => {
+    addReview(reviewData);
+    setPendingReview(null);
+    setPendingConversationHistory([]);
+    setAppState('community'); // Show community page
+  };
+
+  const handleSummaryCancel = () => {
+    setPendingReview(null);
+    setPendingConversationHistory([]);
+    setAppState('landing'); // Go back to landing page
   };
 
   const handleTextReviewComplete = (reviewData) => {
@@ -121,31 +147,57 @@ function App() {
     ]);
   };
 
+  // Show landing page initially
+  if (appState === 'landing') {
+    return (
+      <div className="app">
+        <LandingPage onStartRecording={handleStartRecording} />
+      </div>
+    );
+  }
+
+  // Show community page
+  if (appState === 'community') {
+    return (
+      <div className="app">
+        <header className="header">
+          <div className="header-content">
+            <span className="logo">RMP</span>
+            <nav className="nav">
+              <span className="nav-item active">Professors</span>
+            </nav>
+          </div>
+        </header>
+        
+        <main className="main-content">
+          <ProfessorProfile professor={professorData} />
+          <ReviewFeed 
+            reviews={reviews} 
+            onVoiceReview={handleVoiceReview}
+            onTextReview={handleTextReview}
+            totalRatings={professorData.totalRatings}
+          />
+        </main>
+      </div>
+    );
+  }
+
+  // Show voice assistant or summary overlays
   return (
     <div className="app">
-      <header className="header">
-        <div className="header-content">
-          <span className="logo">RMP</span>
-          <nav className="nav">
-            <span className="nav-item active">Professors</span>
-          </nav>
-        </div>
-      </header>
-      
-      <main className="main-content">
-        <ProfessorProfile professor={professorData} />
-        <ReviewFeed 
-          reviews={reviews} 
-          onVoiceReview={handleVoiceReview}
-          onTextReview={handleTextReview}
-          totalRatings={professorData.totalRatings}
-        />
-      </main>
-
-      {showVoiceAssistant && (
+      {appState === 'voice' && showVoiceAssistant && (
         <VoiceAssistant
           onComplete={handleVoiceAssistantComplete}
           onClose={handleVoiceAssistantClose}
+        />
+      )}
+
+      {appState === 'summary' && pendingReview && (
+        <SummaryPage
+          reviewData={pendingReview}
+          conversationHistory={pendingConversationHistory}
+          onApprove={handleSummaryApprove}
+          onCancel={handleSummaryCancel}
         />
       )}
 

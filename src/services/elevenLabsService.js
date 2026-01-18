@@ -237,18 +237,36 @@ class ElevenLabsService {
       };
       
       // Play the audio - handle browser autoplay restrictions
+      // Create a context to resume audio context if needed
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioContext.state === 'suspended') {
+        audioContext.resume().then(() => {
+          console.log('Audio context resumed');
+        }).catch(err => {
+          console.warn('Could not resume audio context:', err);
+        });
+      }
+      
       const playPromise = audio.play();
       
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
-            console.log('Audio playback started');
+            console.log('Audio playback started successfully');
           })
           .catch((error) => {
             console.error('Error playing audio (autoplay restriction?):', error);
             console.error('This might be due to browser autoplay policy. User interaction may be required.');
-            URL.revokeObjectURL(audioUrl);
-            reject(error);
+            // Try to resume audio context and play again
+            audioContext.resume().then(() => {
+              return audio.play();
+            }).then(() => {
+              console.log('Audio playback started after context resume');
+            }).catch((retryError) => {
+              console.error('Failed to play audio after retry:', retryError);
+              URL.revokeObjectURL(audioUrl);
+              reject(retryError);
+            });
           });
       }
     });

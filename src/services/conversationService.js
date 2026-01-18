@@ -126,7 +126,7 @@ export class ConversationService {
 
   // Process user response and extract data (now async for OpenAI integration)
   async processResponse(userResponse) {
-    const lowerResponse = userResponse.toLowerCase();
+    const lowerResponse = userResponse.toLowerCase().trim();
     const currentPhase = this.conversationState.currentPhase;
     const phaseConfig = this.questionFlow[currentPhase];
     
@@ -136,6 +136,33 @@ export class ConversationService {
       message: userResponse,
       phase: currentPhase
     });
+
+    // Check if user wants to end conversation (bye, goodbye, etc.)
+    const goodbyePhrases = ['bye', 'goodbye', 'see you', 'see ya', 'later', 'that\'s all', 'that\'s it', 'i\'m done', 'done'];
+    const wantsToEnd = goodbyePhrases.some(phrase => lowerResponse.includes(phrase));
+    
+    if (wantsToEnd && currentPhase !== 'closing' && currentPhase !== 'complete') {
+      // User wants to end - move to closing phase
+      this.conversationState.currentPhase = 'closing';
+      const closingConfig = this.questionFlow.closing;
+      const closingMessage = closingConfig?.message || "Thanks for sharing your feedback! Have a great day!";
+      
+      this.conversationState.conversationHistory.push({
+        type: 'assistant',
+        message: closingMessage,
+        phase: 'closing'
+      });
+      
+      // Move to complete phase
+      this.conversationState.currentPhase = 'complete';
+      
+      return {
+        assistantMessage: closingMessage,
+        phase: 'complete',
+        collectedData: { ...this.conversationState.collectedData },
+        isComplete: true
+      };
+    }
 
     // If conversation is already in closing or complete phase, just acknowledge and end
     if (currentPhase === 'closing' || currentPhase === 'complete') {
