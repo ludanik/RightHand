@@ -8,11 +8,11 @@ An AI voice assistant that talks to students after lectures and turns their feed
 
 ## Features
 
-- 🎤 **Voice-to-Voice Interaction**: Natural conversation using OpenAI for intelligent responses and ElevenLabs API for realistic voice synthesis
-- 💬 **Adaptive Conversation Flow**: AI-powered questioning that adapts to student responses using OpenAI GPT (SurveyMonkey-style structure, natural conversation)
-- 🎯 **Automatic Data Extraction**: Extracts structured ratings, course info, and feedback from natural language
-- ⭐ **Rate My Prof Integration**: Automatically formats and uploads reviews to the Rate My Prof style feed
-- 📱 **Easy to Use**: Type or speak your responses - works with or without voice input
+- **Voice-to-Voice Interaction**: Natural conversation using OpenAI for intelligent responses and ElevenLabs API for realistic voice synthesis
+- **Adaptive Conversation Flow**: AI-powered questioning that adapts to student responses using OpenAI GPT (SurveyMonkey-style structure, natural conversation)
+- **Automatic Data Extraction**: Extracts structured ratings, course info, and feedback from natural language
+- **Rate My Prof Integration**: Automatically formats and uploads reviews to the Rate My Prof style feed
+- **Easy to Use**: Type or speak your responses - works with or without voice input
 
 ## Setup
 
