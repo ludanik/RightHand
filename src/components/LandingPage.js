@@ -1,12 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './LandingPage.css';
 
 function LandingPage({ onStartRecording }) {
   const [clickCount, setClickCount] = useState(0);
+  const [centerOffset, setCenterOffset] = useState(0);
+  const logoRef = useRef(null);
+  const hasCalculatedOffset = useRef(false);
+  const lockedOffsetRef = useRef(null); // Lock the offset once calculated
 
   const handleLogoClick = () => {
     if (clickCount === 0) {
+      // Calculate offset ONCE based on actual position
+      // This needs to account for where the logo is now vs where it should be (center)
+      if (logoRef.current && !hasCalculatedOffset.current) {
+        const rect = logoRef.current.getBoundingClientRect();
+        const viewportCenter = window.innerWidth /  2;
+        const logoCenter = rect.left + rect.width / 2;
+        // Calculate offset to center
+        // When text disappears, logo will shift left, so we need to compensate
+        // Estimate text is ~400px wide, so add ~200px to move it right to center
+        const estimatedTextHalfWidth = 200;
+        const currentOffset = viewportCenter - logoCenter;
+        //const finalOffset = currentOffset + estimatedTextHalfWidth;
+        const finalOffset = currentOffset;
+
+        // Lock it immediately - set both ref and state
+        lockedOffsetRef.current = finalOffset;
+        setCenterOffset(finalOffset);
+        hasCalculatedOffset.current = true;
+      }
       // First click: fade text, center and expand logo
       setClickCount(1);
     } else if (clickCount === 1) {
@@ -15,29 +38,54 @@ function LandingPage({ onStartRecording }) {
     }
   };
 
+  // Reset when going back to initial state
+  useEffect(() => {
+    if (clickCount === 0) {
+      setCenterOffset(0);
+      hasCalculatedOffset.current = false;
+      lockedOffsetRef.current = null;
+    }
+    // DO NOT do anything when clickCount === 1
+    // The offset is already locked and should never change
+  }, [clickCount]);
+
   const isCentered = clickCount > 0;
 
   return (
     <div className="landing-page">
-      <div className="logo-container">
+      <div className={`logo-container ${isCentered ? 'centered' : ''}`}>
         <motion.div 
+          ref={logoRef}
           className="logo-icon" 
           onClick={handleLogoClick}
-          initial={false}
+          initial={{ opacity: 0 }}
           animate={{
-            x: isCentered ? 150 : 0,
+            opacity: 1,
+            x: centerOffset,
+            y: isCentered ? 100 : 0,
             scale: isCentered ? 1.3 : 1
           }}
           transition={{
+            opacity: {
+              duration: 1.2,
+              ease: "easeOut"
+            },
             x: {
               type: "spring",
-              stiffness: 60,
-              damping: 20
+              stiffness: 30,
+              damping: 25,
+              restDelta: 0.01,
+              restSpeed: 0.01
+            },
+            y: {
+              type: "spring",
+              stiffness: 30,
+              damping: 25
             },
             scale: {
               type: "spring",
-            stiffness: 60,
-            damping: 20
+              stiffness: 30,
+              damping: 25
             }
           }}
           whileHover={{ 
@@ -47,37 +95,48 @@ function LandingPage({ onStartRecording }) {
             scale: isCentered ? 1.3 : 0.98
           }}
         >
+        <div id="logotext">
           <img 
-            src="/righthand.png" 
-            alt="RightHand Icon" 
-            className="logo-image"
+              src="/righthand.png" 
+              alt="RightHand Icon" 
+              className="logo-image"
+              style={{ marginBottom: '-300px', marginTop: '180px'  }}
           />
+          <motion.img 
+                src="/righthand text.png" 
+                alt="RightHand Text" 
+                className="logo-text-image"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: isCentered ? 0 : 1 }}
+                transition={{ 
+                  opacity: { duration: 1.2, ease: "easeOut" },
+                  default: { duration: 0.5 }
+                }}
+          />
+        </div>
+        
         </motion.div>
-        <AnimatePresence mode="wait">
+        {/* <AnimatePresence>
           {!isCentered && (
             <motion.div 
               className="logo-text"
               initial={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ 
                 opacity: 0, 
-                x: -150, 
+                y: 0, 
                 scale: 0.7 
               }}
               transition={{
                 type: "spring",
-                stiffness: 100,
+                stiffness: 50,
                 damping: 20,
                 duration: 0.8
               }}
             >
-              <img 
-                src="/righthand text.png" 
-                alt="RightHand Text" 
-                className="logo-text-image"
-              />
-            </motion.div>
+              
+             </motion.div> 
           )}
-        </AnimatePresence>
+        </AnimatePresence> */}
       </div>
     </div>
   );
